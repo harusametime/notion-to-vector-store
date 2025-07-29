@@ -1,8 +1,29 @@
-# Notion Database ID Finder
+# Notion to Vector Database Pipeline
 
-このスクリプトは、Notion APIを使用してデータベースIDを取得するためのツールです。
+Notionからデータを抽出し、Amazon Bedrockを使用してエンベディングを生成し、DataStax Astra DBに保存してベクトル検索とセマンティック類似性を実現する完全なパイプラインです。
 
-## セットアップ
+## 🚀 機能
+
+- **Notion統合**: Notionワークスペースからすべてのページとコンテンツを抽出
+- **AIエンベディング**: Amazon Bedrock Titanモデルを使用して高品質なエンベディングを生成
+- **ベクトルデータベース**: セマンティック検索のためにAstra DBにエンベディングとメタデータを保存
+- **自動コレクション管理**: ベクトルコレクションを自動的に作成
+- **豊富なメタデータ**: ページプロパティ、URL、タイムスタンプ、コンテンツブロックを保存
+- **スケーラブル**: ページネーションで大きなNotionワークスペースを処理
+
+## 📋 前提条件
+
+### 必要なサービス
+- **Notion統合** APIアクセス付き
+- **AWSアカウント** Bedrockアクセス付き
+- **DataStax Astra DB** アカウント
+
+### 必要な権限
+- "コンテンツの読み取り"権限を持つNotion統合
+- TitanエンベディングモデルへのAWS Bedrockアクセス
+- ベクトル検索機能を持つAstra DB
+
+## 🛠️ セットアップ
 
 ### 1. 依存関係のインストール
 
@@ -10,56 +31,212 @@
 pip install -r requirements.txt
 ```
 
-### 2. 環境変数の設定
+### 2. 環境設定
 
-`.env` ファイルを作成し、Notionのインテグレーショントークンを設定してください：
+認証情報を含む`.env`ファイルを作成してください：
 
 ```bash
+# Notion設定
 NOTION_SECRET=your_notion_integration_token_here
+NOTION_CONNECTION=your_notion_connection_id_here
+
+# AWS Bedrock設定
+AWS_ACCESS_KEY=your_aws_access_key_here
+AWS_SECRET_KEY=your_aws_secret_key_here
+AWS_REGION=us-east-1
+BEDROCK_MODEL_ID=amazon.titan-embed-text-v2:0
+
+# DataStax Astra DB設定
+ASTRA_DB_ENDPOINT=your_astra_db_endpoint_here
+ASTRA_DB_KEYSPACE=your_keyspace_name_here
+ASTRA_DB_APPLICATION_TOKEN=your_astra_db_token_here
+ASTRA_DB_NAME=your_database_name_here
+VECTOR_COLLECTION_NAME=your_collection_name_here
 ```
 
-### 3. Notionインテグレーションの設定
+### 3. 認証情報の取得
 
+#### Notion統合
 1. [Notion Integrations](https://www.notion.so/my-integrations) にアクセス
-2. 新しいインテグレーションを作成
-3. インテグレーショントークンをコピーして `.env` ファイルに設定
-4. データベースにインテグレーションを追加（データベースの設定 → コネクション → インテグレーションを追加）
+2. 新しい統合を作成
+3. "Internal Integration Token"をコピー
+4. ワークスペースのページに統合を追加
 
-## 使用方法
+#### AWS Bedrock
+1. AWSコンソールにアクセスしてBedrockに移動
+2. Titanエンベディングモデルへのアクセスをリクエスト
+3. Bedrock権限を持つIAM認証情報を作成
+4. アクセスキーとシークレットキーをコピー
 
-### すべてのデータベースを表示
+#### Astra DB
+1. 新しいAstra DBデータベースを作成
+2. アプリケーショントークンを生成
+3. データベースエンドポイントとキースペースを記録
+4. ベクトル検索機能を有効化
+
+## 🚀 使用方法
+
+### パイプラインの実行
 
 ```bash
-python get_notion_databases.py
+python notion_to_vector_db.py
 ```
 
-### 特定のデータベースの詳細を表示
+パイプラインは以下を実行します：
+1. ✅ Notionワークスペースに接続
+2. ✅ アクセス可能なすべてのページを抽出
+3. ✅ Amazon Bedrockを使用してエンベディングを生成
+4. ✅ Astra DBにベクトルコレクションを作成（必要に応じて）
+5. ✅ エンベディングとメタデータでページを保存
+6. ✅ 進行状況の更新とサマリーを提供
 
-```bash
-python get_notion_databases.py --database <database_id>
+### 出力例
+
+```
+🚀 Notion to Vector Database Pipeline
+==================================================
+✅ Bedrock client created successfully
+✅ Astra DB client created successfully
+✅ Vector collection 'vector_collection' created successfully
+🔍 Searching for Notion pages...
+📄 Found 8 page(s)
+
+📄 Processing page 1/8: 12015dc6-b965-80f2-af2b-ee7fc8a1653b
+   🔍 Generating embedding for content...
+   💾 Storing in vector database...
+   ✅ Successfully stored page 1/8
+
+🎉 Processing completed!
+📊 Summary:
+   - Total pages found: 8
+   - Successfully processed: 8
+   - Failed: 0
 ```
 
-## 出力例
+## 📊 データベーススキーマ
 
+パイプラインは以下の構造を持つベクトルコレクションを作成します：
+
+```json
+{
+  "page_id": "unique_notion_page_id",
+  "page_title": "ページタイトル",
+  "page_url": "https://notion.so/...",
+  "created_time": "2024-01-01T00:00:00Z",
+  "last_edited_time": "2024-01-01T00:00:00Z",
+  "archived": false,
+  "properties": {
+    "title": "ページタイトル",
+    "tags": ["tag1", "tag2"]
+  },
+  "content_text": "エンベディング用の完全なテキストコンテンツ",
+  "content_blocks": [
+    {
+      "id": "block_id",
+      "type": "paragraph",
+      "content": "ブロックコンテンツ"
+    }
+  ],
+  "embedding_model": "amazon.titan-embed-text-v2:0",
+  "created_at": "2024-01-01T00:00:00Z",
+  "$vector": [0.1, 0.2, ...] // 1024次元のエンベディング
+}
 ```
-🔍 Notion Database ID Finder
-========================================
-📊 Found 2 database(s):
---------------------------------------------------------------------------------
-1. Database ID: 12345678-1234-1234-1234-123456789abc
-   Title: My Project Database
-   URL: https://notion.so/12345678123412341234123456789abc
 
-2. Database ID: 87654321-4321-4321-4321-cba987654321
-   Title: Task Tracker
-   URL: https://notion.so/87654321432143214321cba987654321
+## 🔍 ベクトル検索
 
-💡 To get detailed information about a specific database, run:
-python get_notion_databases.py --database <database_id>
+パイプラインを実行した後、Astra DBのベクトル機能を使用してセマンティック検索を実行できます：
+
+```python
+from astrapy.db import AstraDB
+
+# データベースに接続
+db = AstraDB(
+    token="your_token",
+    api_endpoint="your_endpoint",
+    namespace="your_keyspace"
+)
+
+# 類似コンテンツを検索
+results = db.collection("your_collection").find(
+    {},
+    sort={"$vector": your_query_embedding},
+    limit=5
+)
 ```
 
-## 注意事項
+## 🛡️ エラーハンドリング
 
-- Notionインテグレーションがデータベースにアクセス権限を持っていることを確認してください
-- データベースIDは、NotionのURLからも取得できます（URLの最後の部分）
-- インテグレーショントークンは機密情報なので、`.env` ファイルをGitにコミットしないでください 
+パイプラインには以下の堅牢なエラーハンドリングが含まれています：
+- ✅ 環境変数の不足
+- ✅ 無効な認証情報
+- ✅ ネットワーク接続の問題
+- ✅ コレクション作成の失敗
+- ✅ エンベディング生成エラー
+- ✅ データベース挿入の失敗
+
+## 📈 パフォーマンス
+
+- **エンベディング生成**: ページあたり約1-2秒
+- **データベース保存**: ページあたり約0.5秒
+- **メモリ使用量**: 最小限、ページを順次処理
+- **ネットワーク**: Astra DBのREST APIに最適化
+
+## 🔧 設定オプション
+
+### 環境変数
+
+| 変数 | 説明 | デフォルト |
+|------|------|------------|
+| `BEDROCK_MODEL_ID` | エンベディング用のAmazon Bedrockモデル | `amazon.titan-embed-text-v2:0` |
+| `AWS_REGION` | Bedrock用のAWSリージョン | `us-east-1` |
+| `VECTOR_COLLECTION_NAME` | Astra DBコレクション名 | `vector_collection` |
+
+### エンベディングモデル
+
+パイプラインはAmazon Titanのテキストエンベディングモデルを使用します：
+- **次元数**: 1024
+- **メトリック**: コサイン類似性
+- **品質**: 高品質なセマンティックエンベディング
+
+## 🤝 貢献
+
+1. リポジトリをフォーク
+2. 機能ブランチを作成
+3. 変更を加える
+4. 独自のNotionワークスペースでテスト
+5. プルリクエストを送信
+
+## 📄 ライセンス
+
+このプロジェクトはMITライセンスの下でライセンスされています - 詳細は[LICENSE](LICENSE)ファイルを参照してください。
+
+## 🆘 トラブルシューティング
+
+### よくある問題
+
+**"Collection does not exist"**
+- パイプラインはコレクションを自動的に作成します
+- Astra DBの権限を確認してください
+- `.env`のコレクション名を確認してください
+
+**"AWS credentials not found"**
+- `.env`ファイルに`AWS_ACCESS_KEY`と`AWS_SECRET_KEY`があることを確認
+- AWS認証情報にBedrockアクセスがあることを確認
+
+**"No pages found"**
+- Notion統合の権限を確認
+- 統合がワークスペースのページに追加されていることを確認
+- `NOTION_SECRET`が正しいことを確認
+
+**"Bedrock access denied"**
+- AWS BedrockでTitanエンベディングモデルへのアクセスをリクエスト
+- Bedrock用のIAM権限を確認
+
+## 📞 サポート
+
+問題や質問がある場合：
+1. 上記のトラブルシューティングセクションを確認
+2. 認証情報と権限を確認
+3. Astra DBとAWS Bedrockのドキュメントを確認
+4. GitHubでイシューを開く 
