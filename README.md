@@ -74,6 +74,100 @@ VECTOR_COLLECTION_NAME=your_collection_name_here
 3. データベースエンドポイントとキースペースを記録
 4. ベクトル検索機能を有効化
 
+## 🐳 Docker での実行
+
+### Docker を使用したセットアップ
+
+#### 1. Dockerfile の確認
+
+プロジェクトには既に `Dockerfile` が含まれています：
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY notion_to_vector_db.py .
+CMD ["python", "notion_to_vector_db.py"]
+```
+
+#### 2. Docker イメージのビルド
+
+```bash
+docker build -t notion-to-vector-db .
+```
+
+#### 3. 環境変数の設定
+
+`.env` ファイルを作成し、認証情報を設定してください：
+
+```bash
+# .env ファイルの例
+NOTION_SECRET=your_notion_integration_token_here
+NOTION_CONNECTION=your_notion_connection_id_here
+AWS_ACCESS_KEY=your_aws_access_key_here
+AWS_SECRET_KEY=your_aws_secret_key_here
+AWS_REGION=us-east-1
+BEDROCK_MODEL_ID=amazon.titan-embed-text-v2:0
+ASTRA_DB_ENDPOINT=your_astra_db_endpoint_here
+ASTRA_DB_APPLICATION_TOKEN=your_astra_db_token_here
+ASTRA_DB_KEYSPACE=default_keyspace
+ASTRA_DB_NAME=vector_db
+VECTOR_COLLECTION_NAME=vector_collection
+```
+
+#### 4. Docker コンテナの実行
+
+環境変数を渡してコンテナを実行：
+
+```bash
+# 方法1: --env-file を使用
+docker run --env-file .env notion-to-vector-db
+
+# 方法2: 個別の環境変数を指定
+docker run \
+  -e NOTION_SECRET=your_token \
+  -e NOTION_CONNECTION=your_connection \
+  -e AWS_ACCESS_KEY=your_key \
+  -e AWS_SECRET_KEY=your_secret \
+  -e AWS_REGION=us-east-1 \
+  -e BEDROCK_MODEL_ID=amazon.titan-embed-text-v2:0 \
+  -e ASTRA_DB_ENDPOINT=your_endpoint \
+  -e ASTRA_DB_APPLICATION_TOKEN=your_token \
+  -e ASTRA_DB_KEYSPACE=default_keyspace \
+  -e ASTRA_DB_NAME=vector_db \
+  -e VECTOR_COLLECTION_NAME=vector_collection \
+  notion-to-vector-db
+```
+
+#### 5. Docker Compose での実行（オプション）
+
+`docker-compose.yml` ファイルを作成：
+
+```yaml
+version: '3.8'
+services:
+  notion-to-vector-db:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+```
+
+実行：
+
+```bash
+docker-compose up --build
+```
+
+### Docker の利点
+
+- ✅ **一貫した環境**: 依存関係の競合なし
+- ✅ **簡単なデプロイ**: 任意のDocker環境で実行可能
+- ✅ **分離された実行**: システムに影響を与えない
+- ✅ **スケーラビリティ**: 複数のインスタンスで並列実行可能
+
 ## 🚀 使用方法
 
 ### パイプラインの実行

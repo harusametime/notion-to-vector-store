@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  notion-to-vector-db:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Optional: Mount logs directory if you want to persist logs
+      - ./logs:/app/logs
+    restart: "no"  # Don't restart automatically since this is a one-time job 
