@@ -87,27 +87,52 @@ def get_embedding(bedrock_client, text, model_id):
         return None
 
 def get_all_notion_pages(notion_secret):
-    """Retrieve all pages from Notion"""
+    """Retrieve all pages from Notion with pagination support"""
     try:
         notion = Client(auth=notion_secret)
         
         print("🔍 Searching for Notion pages...")
         
-        response = notion.search(
-            filter={
-                "property": "object",
-                "value": "page"
+        all_pages = []
+        has_more = True
+        start_cursor = None
+        page_count = 0
+        
+        while has_more:
+            page_count += 1
+            print(f"   📄 Fetching page {page_count}...")
+            
+            # Prepare search parameters
+            search_params = {
+                "filter": {
+                    "property": "object",
+                    "value": "page"
+                }
             }
-        )
+            
+            # Add cursor for pagination (except for first page)
+            if start_cursor:
+                search_params["start_cursor"] = start_cursor
+            
+            # Perform search
+            response = notion.search(**search_params)
+            
+            # Get results from this page
+            pages = response.get('results', [])
+            all_pages.extend(pages)
+            
+            # Check if there are more pages
+            has_more = response.get('has_more', False)
+            start_cursor = response.get('next_cursor')
+            
+            print(f"   📄 Found {len(pages)} pages on page {page_count}")
         
-        pages = response.get('results', [])
-        
-        if not pages:
+        if not all_pages:
             print("📝 No pages found accessible to this integration")
             return []
         
-        print(f"📄 Found {len(pages)} page(s)")
-        return pages
+        print(f"📄 Total pages found: {len(all_pages)} across {page_count} API calls")
+        return all_pages
         
     except Exception as e:
         print(f"❌ Error retrieving Notion pages: {e}")
