@@ -318,13 +318,37 @@ def create_vector_collection(db, collection_name):
         return None
 
 def check_page_exists(db, collection_name, page_id):
-    """Check if a page already exists in the collection"""
+    """Check if a page already exists in the collection and return its data"""
     try:
         result = db.collection(collection_name).find_one({"page_id": page_id})
-        return result is not None
+        # Check if result contains actual document data
+        document_data = result.get('data', {}).get('document') if result else None
+        if result and document_data is not None:
+            return result
+        else:
+            return None
     except Exception as e:
         print(f"❌ Error checking if page exists: {e}")
-        return False
+        return None
+
+def should_update_page(existing_page, page_data):
+    """Check if page needs updating based on last modified time"""
+    if not existing_page:
+        return True  # New page, needs insertion
+    
+    # Get last updated time from existing page
+    existing_doc = existing_page.get('data', {}).get('document', {})
+    existing_updated_time = existing_doc.get('last_updated_time')
+    if not existing_updated_time:
+        return True  # No timestamp, update to be safe
+    
+    # Compare with current page's last edited time
+    current_edited_time = page_data.get('last_edited_time')
+    if not current_edited_time:
+        return True  # No current timestamp, update to be safe
+    
+    # Update if current page is newer
+    return current_edited_time > existing_updated_time
 
 def update_page_embedding(db, collection_name, page_data, embedding, model_id):
     """Update an existing page with new data and embedding"""
@@ -350,6 +374,7 @@ def update_page_embedding(db, collection_name, page_data, embedding, model_id):
             "content_blocks": page_data['content_blocks'],
             "embedding_model": model_id,
             "updated_at": datetime.now().isoformat(),
+            "last_updated_time": datetime.now().isoformat(),  # Track when we last updated
             "$vector": embedding
         }
         
@@ -389,6 +414,7 @@ def insert_page_embedding(db, collection_name, page_data, embedding, model_id):
             "content_blocks": page_data['content_blocks'],
             "embedding_model": model_id,
             "created_at": datetime.now().isoformat(),
+            "last_updated_time": datetime.now().isoformat(),  # Track when we last updated
             "$vector": embedding
         }
         
@@ -442,14 +468,15 @@ def process_notion_to_vector_db():
     successful_inserts = 0
     updated_pages = 0
     skipped_pages = 0
+    unchanged_pages = 0
     total_pages = len(pages)
     
     for i, page in enumerate(pages, 1):
         page_id = page['id']
         print(f"\n📄 Processing page {i}/{total_pages}: {page_id}")
         
-        # Check if page already exists
-        page_exists = check_page_exists(db, vector_collection_name, page_id)
+        # Check if page already exists and get its data
+        existing_page = check_page_exists(db, vector_collection_name, page_id)
         
         # Get detailed page content
         page_content = get_page_content(notion_secret, page_id)
@@ -460,14 +487,28 @@ def process_notion_to_vector_db():
         # Extract page data
         page_data = extract_page_data(page_content)
         
-        # Generate embedding if there's content
-        if page_data['content_text'].strip():
+        # Check if page needs updating
+        needs_update = should_update_page(existing_page, page_data)
+        
+        # Debug: Show what's happening
+        if existing_page is not None:
+            # The existing_page is the full result, we need to get the document data
+            existing_doc = existing_page.get('data', {}).get('document', {})
+            existing_time = existing_doc.get('last_updated_time', 'None')
+            current_time = page_data.get('last_edited_time', 'None')
+            print(f"      📅 Existing: {existing_time}")
+            print(f"      📅 Current: {current_time}")
+            print(f"      🔍 Needs update: {needs_update}")
+        else:
+            print(f"      📅 New page, will insert")
+        
+        if needs_update and page_data['content_text'].strip():
             print(f"   🔍 Generating embedding for content...")
             embedding = get_embedding(bedrock_client, page_data['content_text'], bedrock_model_id)
             
             if embedding:
-                if page_exists:
-                    print(f"   🔄 Page already exists, updating...")
+                if existing_page is not None:
+                    print(f"   🔄 Page changed, updating...")
                     if update_page_embedding(db, vector_collection_name, page_data, embedding, bedrock_model_id):
                         updated_pages += 1
                         print(f"   ✅ Successfully updated page {i}/{total_pages}")
@@ -482,6 +523,9 @@ def process_notion_to_vector_db():
                         print(f"   ❌ Failed to store page {i}/{total_pages}")
             else:
                 print(f"   ⚠️  Failed to generate embedding for page {i}/{total_pages}")
+        elif not needs_update:
+            print(f"   ⏭️  Page unchanged, skipping...")
+            unchanged_pages += 1
         else:
             print(f"   ⚠️  No content to embed for page {i}/{total_pages}")
             skipped_pages += 1
@@ -492,8 +536,9 @@ def process_notion_to_vector_db():
     print(f"   - Total pages found: {total_pages}")
     print(f"   - New pages inserted: {successful_inserts}")
     print(f"   - Existing pages updated: {updated_pages}")
+    print(f"   - Pages unchanged (skipped): {unchanged_pages}")
     print(f"   - Pages skipped (no content): {skipped_pages}")
-    print(f"   - Failed: {total_pages - successful_inserts - updated_pages - skipped_pages}")
+    print(f"   - Failed: {total_pages - successful_inserts - updated_pages - unchanged_pages - skipped_pages}")
     
     return successful_inserts + updated_pages
 

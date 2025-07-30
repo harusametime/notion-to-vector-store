@@ -90,17 +90,23 @@ python notion_to_vector_db.py
 5. ✅ エンベディングとメタデータでページを保存
 6. ✅ 進行状況の更新とサマリーを提供
 
-### 🔄 重複処理の防止
+### 🔄 重複処理の防止とコスト最適化
 
-パイプラインは**重複を自動的に防止**します：
+パイプラインは**重複を自動的に防止**し、**Bedrock APIコストを最小化**します：
 
 - **初回実行**: すべてのページが新規挿入されます
 - **再実行時**: 
-  - 既存ページ → **更新**（最新のコンテンツとベクトルで上書き）
-  - 新規ページ → **新規挿入**
-  - 変更なし → **スキップ**
+  - **変更されたページ** → **更新**（最新のコンテンツとベクトルで上書き）
+  - **新規ページ** → **新規挿入**
+  - **変更なしのページ** → **スキップ**（Bedrock API呼び出しを節約）
 
-これにより、同じページの重複エントリが作成されることはありません。
+**コスト最適化機能:**
+- ✅ **タイムスタンプ比較**: Notionの`last_edited_time`を使用
+- ✅ **変更検出**: 変更されたページのみ更新
+- ✅ **API呼び出し削減**: 未変更ページはスキップ
+- ✅ **詳細統計**: 挿入、更新、スキップ数を表示
+
+これにより、同じページの重複エントリが作成されることはなく、Bedrock APIコストも大幅に削減されます。
 
 ### 出力例
 
@@ -121,8 +127,9 @@ python notion_to_vector_db.py
 🎉 Processing completed!
 📊 Summary:
    - Total pages found: 8
-   - New pages inserted: 5
-   - Existing pages updated: 3
+   - New pages inserted: 1
+   - Existing pages updated: 2
+   - Pages unchanged (skipped): 5
    - Pages skipped (no content): 0
    - Failed: 0
 ```
