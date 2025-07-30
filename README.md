@@ -33,7 +33,7 @@ pip install -r requirements.txt
 
 ### 2. 環境設定
 
-認証情報を含む`.env`ファイルを作成してください：
+認証情報を含む`.env`ファイルを作成してください（`.env.example`を参考にしてください）：
 
 ```bash
 # Notion設定
