@@ -90,6 +90,18 @@ python notion_to_vector_db.py
 5. ✅ エンベディングとメタデータでページを保存
 6. ✅ 進行状況の更新とサマリーを提供
 
+### 🔄 重複処理の防止
+
+パイプラインは**重複を自動的に防止**します：
+
+- **初回実行**: すべてのページが新規挿入されます
+- **再実行時**: 
+  - 既存ページ → **更新**（最新のコンテンツとベクトルで上書き）
+  - 新規ページ → **新規挿入**
+  - 変更なし → **スキップ**
+
+これにより、同じページの重複エントリが作成されることはありません。
+
 ### 出力例
 
 ```
@@ -109,7 +121,9 @@ python notion_to_vector_db.py
 🎉 Processing completed!
 📊 Summary:
    - Total pages found: 8
-   - Successfully processed: 8
+   - New pages inserted: 5
+   - Existing pages updated: 3
+   - Pages skipped (no content): 0
    - Failed: 0
 ```
 

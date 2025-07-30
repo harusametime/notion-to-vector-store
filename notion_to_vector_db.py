@@ -292,6 +292,54 @@ def create_vector_collection(db, collection_name):
         print(f"❌ Error with vector collection: {e}")
         return None
 
+def check_page_exists(db, collection_name, page_id):
+    """Check if a page already exists in the collection"""
+    try:
+        result = db.collection(collection_name).find_one({"page_id": page_id})
+        return result is not None
+    except Exception as e:
+        print(f"❌ Error checking if page exists: {e}")
+        return False
+
+def update_page_embedding(db, collection_name, page_data, embedding, model_id):
+    """Update an existing page with new data and embedding"""
+    try:
+        # Extract title from properties
+        page_title = "Untitled"
+        if 'properties' in page_data:
+            for prop_name, prop_value in page_data['properties'].items():
+                if prop_name.lower() in ['title', 'name']:
+                    page_title = str(prop_value) if prop_value else "Untitled"
+                    break
+        
+        # Prepare document for update
+        document = {
+            "page_id": page_data['id'],
+            "page_title": page_title,
+            "page_url": page_data['url'],
+            "created_time": page_data['created_time'],
+            "last_edited_time": page_data['last_edited_time'],
+            "archived": page_data['archived'],
+            "properties": page_data['properties'],
+            "content_text": page_data['content_text'],
+            "content_blocks": page_data['content_blocks'],
+            "embedding_model": model_id,
+            "updated_at": datetime.now().isoformat(),
+            "$vector": embedding
+        }
+        
+        # Update document in collection
+        result = db.collection(collection_name).update_one(
+            {"page_id": page_data['id']},
+            {"$set": document}
+        )
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error updating page embedding: {e}")
+        return False
+
 def insert_page_embedding(db, collection_name, page_data, embedding, model_id):
     """Insert a page with its embedding into Astra DB"""
     try:
@@ -367,11 +415,16 @@ def process_notion_to_vector_db():
     
     # Process each page
     successful_inserts = 0
+    updated_pages = 0
+    skipped_pages = 0
     total_pages = len(pages)
     
     for i, page in enumerate(pages, 1):
         page_id = page['id']
         print(f"\n📄 Processing page {i}/{total_pages}: {page_id}")
+        
+        # Check if page already exists
+        page_exists = check_page_exists(db, vector_collection_name, page_id)
         
         # Get detailed page content
         page_content = get_page_content(notion_secret, page_id)
@@ -388,25 +441,36 @@ def process_notion_to_vector_db():
             embedding = get_embedding(bedrock_client, page_data['content_text'], bedrock_model_id)
             
             if embedding:
-                print(f"   💾 Storing in vector database...")
-                if insert_page_embedding(db, vector_collection_name, page_data, embedding, bedrock_model_id):
-                    successful_inserts += 1
-                    print(f"   ✅ Successfully stored page {i}/{total_pages}")
+                if page_exists:
+                    print(f"   🔄 Page already exists, updating...")
+                    if update_page_embedding(db, vector_collection_name, page_data, embedding, bedrock_model_id):
+                        updated_pages += 1
+                        print(f"   ✅ Successfully updated page {i}/{total_pages}")
+                    else:
+                        print(f"   ❌ Failed to update page {i}/{total_pages}")
                 else:
-                    print(f"   ❌ Failed to store page {i}/{total_pages}")
+                    print(f"   💾 Storing new page in vector database...")
+                    if insert_page_embedding(db, vector_collection_name, page_data, embedding, bedrock_model_id):
+                        successful_inserts += 1
+                        print(f"   ✅ Successfully stored page {i}/{total_pages}")
+                    else:
+                        print(f"   ❌ Failed to store page {i}/{total_pages}")
             else:
                 print(f"   ⚠️  Failed to generate embedding for page {i}/{total_pages}")
         else:
             print(f"   ⚠️  No content to embed for page {i}/{total_pages}")
+            skipped_pages += 1
     
     # Summary
     print(f"\n🎉 Processing completed!")
     print(f"📊 Summary:")
     print(f"   - Total pages found: {total_pages}")
-    print(f"   - Successfully processed: {successful_inserts}")
-    print(f"   - Failed: {total_pages - successful_inserts}")
+    print(f"   - New pages inserted: {successful_inserts}")
+    print(f"   - Existing pages updated: {updated_pages}")
+    print(f"   - Pages skipped (no content): {skipped_pages}")
+    print(f"   - Failed: {total_pages - successful_inserts - updated_pages - skipped_pages}")
     
-    return successful_inserts
+    return successful_inserts + updated_pages
 
 def main():
     """Main function"""
