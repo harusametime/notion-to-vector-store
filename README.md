@@ -54,7 +54,7 @@ ASTRA_DB_NAME=your_database_name_here
 VECTOR_COLLECTION_NAME=your_collection_name_here
 
 # テキストチャンキング設定
-CHUNK_SIZE=8000
+CHUNK_SIZE=1000
 ```
 
 ### 3. 認証情報の取得
@@ -264,7 +264,7 @@ python notion_to_vector_db.py
 
 **チャンキングの特徴:**
 - ✅ **RecursiveCharacterTextSplitter**: LangChainの高度なテキスト分割機能を使用
-- ✅ **適応的チャンクサイズ**: `CHUNK_SIZE`環境変数で設定可能（デフォルト: 8000文字）
+- ✅ **適応的チャンクサイズ**: `CHUNK_SIZE`環境変数で設定可能（デフォルト: 1000文字）
 - ✅ **オーバーラップ**: チャンク間の200文字オーバーラップでコンテキスト保持
 - ✅ **スマート分割**: 段落、文、単語の境界で優先的に分割
 - ✅ **複数チャンク対応**: 1ページが複数のベクトルとして保存
@@ -272,9 +272,10 @@ python notion_to_vector_db.py
 **設定例:**
 ```bash
 # .env ファイルでチャンクサイズを調整
-CHUNK_SIZE=8000  # 長いページ用
-CHUNK_SIZE=4000  # 短いページ用
-CHUNK_SIZE=12000 # 非常に長いページ用
+CHUNK_SIZE=1000  # 短いページ用（デフォルト）
+CHUNK_SIZE=2000  # 中程度のページ用
+CHUNK_SIZE=4000  # 長いページ用
+CHUNK_SIZE=8000  # 非常に長いページ用
 ```
 
 ### データベース構造

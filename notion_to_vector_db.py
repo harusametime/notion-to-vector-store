@@ -36,7 +36,7 @@ def load_environment():
     vector_collection_name = os.getenv('VECTOR_COLLECTION_NAME')
     
     # Chunking configuration
-    chunk_size = int(os.getenv('CHUNK_SIZE', '8000'))  # Default 8000 tokens
+    chunk_size = int(os.getenv('CHUNK_SIZE', '1000'))  # Default 1000 tokens
     
     # Validate required credentials
     if not notion_secret:
