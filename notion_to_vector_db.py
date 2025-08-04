@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from notion_client import Client
 from botocore.exceptions import ClientError, NoCredentialsError
 from astrapy.db import AstraDB
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 def load_environment():
     """Load environment variables from .env file"""
@@ -34,23 +35,26 @@ def load_environment():
     astra_db_name = os.getenv('ASTRA_DB_NAME')
     vector_collection_name = os.getenv('VECTOR_COLLECTION_NAME')
     
+    # Chunking configuration
+    chunk_size = int(os.getenv('CHUNK_SIZE', '8000'))  # Default 8000 tokens
+    
     # Validate required credentials
     if not notion_secret:
         print("❌ NOTION_SECRET not found in .env file")
-        return None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None
     
     if not aws_access_key or not aws_secret_key:
         print("❌ AWS credentials not found in .env file")
-        return None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None
     
     if not astra_db_endpoint or not astra_db_keyspace or not astra_db_application_token:
         print("❌ Astra DB credentials not found in .env file")
         print("Please add: ASTRA_DB_ENDPOINT, ASTRA_DB_KEYSPACE, ASTRA_DB_APPLICATION_TOKEN")
-        return None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None
     
     return (notion_secret, notion_connection, aws_access_key, aws_secret_key, 
             aws_region, bedrock_model_id, astra_db_endpoint, astra_db_keyspace, 
-            astra_db_application_token, astra_db_name, vector_collection_name)
+            astra_db_application_token, astra_db_name, vector_collection_name, chunk_size)
 
 def create_bedrock_client(aws_access_key, aws_secret_key, aws_region):
     """Create and configure Bedrock client"""
@@ -85,6 +89,70 @@ def get_embedding(bedrock_client, text, model_id):
     except Exception as e:
         print(f"❌ Error getting embedding: {e}")
         return None
+
+def chunk_text(text, chunk_size, overlap=200):
+    """
+    Split text into chunks of specified size with overlap using RecursiveCharacterTextSplitter.
+    
+    Args:
+        text (str): Text to chunk
+        chunk_size (int): Maximum tokens per chunk (approximate)
+        overlap (int): Number of characters to overlap between chunks
+    
+    Returns:
+        list: List of text chunks
+    """
+    if not text or len(text) <= chunk_size:
+        return [text] if text else []
+    
+    # Create text splitter with intelligent chunking
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        length_function=len,
+        separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""]  # Priority order for splitting
+    )
+    
+    # Split the text
+    chunks = text_splitter.split_text(text)
+    
+    return chunks
+
+def get_chunk_embeddings(bedrock_client, text, model_id, chunk_size):
+    """
+    Get embeddings for text chunks.
+    
+    Args:
+        bedrock_client: Bedrock client
+        text (str): Text to embed
+        model_id (str): Bedrock model ID
+        chunk_size (int): Maximum tokens per chunk
+    
+    Returns:
+        list: List of tuples (chunk_text, embedding)
+    """
+    if not text or not text.strip():
+        return []
+    
+    # Split text into chunks
+    chunks = chunk_text(text, chunk_size)
+    
+    if not chunks:
+        return []
+    
+    print(f"   📄 Split content into {len(chunks)} chunk(s)")
+    
+    chunk_embeddings = []
+    for i, chunk in enumerate(chunks, 1):
+        print(f"   🔍 Generating embedding for chunk {i}/{len(chunks)}...")
+        embedding = get_embedding(bedrock_client, chunk, model_id)
+        
+        if embedding:
+            chunk_embeddings.append((chunk, embedding))
+        else:
+            print(f"   ⚠️  Failed to generate embedding for chunk {i}")
+    
+    return chunk_embeddings
 
 def get_all_notion_pages(notion_secret):
     """Retrieve all pages from Notion with pagination support"""
@@ -320,11 +388,14 @@ def create_vector_collection(db, collection_name):
 def check_page_exists(db, collection_name, page_id):
     """Check if a page already exists in the collection and return its data"""
     try:
-        result = db.collection(collection_name).find_one({"page_id": page_id})
-        # Check if result contains actual document data
-        document_data = result.get('data', {}).get('document') if result else None
-        if result and document_data is not None:
-            return result
+        # Find all chunks for this page
+        result = db.collection(collection_name).find({"page_id": page_id})
+        chunks = list(result)
+        
+        if chunks:
+            # Return the first chunk as representative of the page
+            # All chunks should have the same page metadata
+            return chunks[0]
         else:
             return None
     except Exception as e:
@@ -337,8 +408,15 @@ def should_update_page(existing_page, page_data):
         return True  # New page, needs insertion
     
     # Get last updated time from existing page
-    existing_doc = existing_page.get('data', {}).get('document', {})
-    existing_updated_time = existing_doc.get('last_updated_time')
+    # Handle both old single-vector format and new chunked format
+    if 'data' in existing_page and 'document' in existing_page['data']:
+        # Old format
+        existing_doc = existing_page['data']['document']
+        existing_updated_time = existing_doc.get('last_updated_time')
+    else:
+        # New chunked format - document is directly in the result
+        existing_updated_time = existing_page.get('last_updated_time')
+    
     if not existing_updated_time:
         return True  # No timestamp, update to be safe
     
@@ -390,6 +468,102 @@ def update_page_embedding(db, collection_name, page_data, embedding, model_id):
         print(f"❌ Error updating page embedding: {e}")
         return False
 
+def update_page_chunks(db, collection_name, page_data, chunk_embeddings, model_id):
+    """Update an existing page with new chunked data and embeddings"""
+    try:
+        # Extract title from properties
+        page_title = "Untitled"
+        if 'properties' in page_data:
+            for prop_name, prop_value in page_data['properties'].items():
+                if prop_name.lower() in ['title', 'name']:
+                    page_title = str(prop_value) if prop_value else "Untitled"
+                    break
+        
+        # First, delete all existing chunks for this page
+        delete_result = db.collection(collection_name).delete_many({"page_id": page_data['id']})
+        print(f"   🗑️  Deleted {delete_result.deleted_count} existing chunk(s)")
+        
+        # Insert new chunks
+        inserted_count = 0
+        for i, (chunk_text, embedding) in enumerate(chunk_embeddings, 1):
+            # Prepare document for each chunk
+            document = {
+                "page_id": page_data['id'],
+                "chunk_id": f"{page_data['id']}_chunk_{i}",
+                "chunk_index": i,
+                "page_title": page_title,
+                "page_url": page_data['url'],
+                "created_time": page_data['created_time'],
+                "last_edited_time": page_data['last_edited_time'],
+                "archived": page_data['archived'],
+                "properties": page_data['properties'],
+                "content_text": page_data['content_text'],  # Full content for reference
+                "chunk_text": chunk_text,  # This chunk's text
+                "content_blocks": page_data['content_blocks'],
+                "embedding_model": model_id,
+                "updated_at": datetime.now().isoformat(),
+                "last_updated_time": datetime.now().isoformat(),
+                "$vector": embedding
+            }
+            
+            # Insert chunk document
+            result = db.collection(collection_name).insert_one(document)
+            if result.inserted_id:
+                inserted_count += 1
+        
+        print(f"   💾 Inserted {inserted_count} new chunk(s)")
+        return inserted_count > 0
+        
+    except Exception as e:
+        print(f"❌ Error updating page chunks: {e}")
+        return False
+
+def insert_page_chunks(db, collection_name, page_data, chunk_embeddings, model_id):
+    """Insert a page with its chunked embeddings into Astra DB"""
+    try:
+        # Extract title from properties
+        page_title = "Untitled"
+        if 'properties' in page_data:
+            for prop_name, prop_value in page_data['properties'].items():
+                if prop_name.lower() in ['title', 'name']:
+                    page_title = str(prop_value) if prop_value else "Untitled"
+                    break
+        
+        # Insert all chunks
+        inserted_count = 0
+        for i, (chunk_text, embedding) in enumerate(chunk_embeddings, 1):
+            # Prepare document for each chunk
+            document = {
+                "page_id": page_data['id'],
+                "chunk_id": f"{page_data['id']}_chunk_{i}",
+                "chunk_index": i,
+                "page_title": page_title,
+                "page_url": page_data['url'],
+                "created_time": page_data['created_time'],
+                "last_edited_time": page_data['last_edited_time'],
+                "archived": page_data['archived'],
+                "properties": page_data['properties'],
+                "content_text": page_data['content_text'],  # Full content for reference
+                "chunk_text": chunk_text,  # This chunk's text
+                "content_blocks": page_data['content_blocks'],
+                "embedding_model": model_id,
+                "created_at": datetime.now().isoformat(),
+                "last_updated_time": datetime.now().isoformat(),
+                "$vector": embedding
+            }
+            
+            # Insert chunk document
+            result = db.collection(collection_name).insert_one(document)
+            if result.inserted_id:
+                inserted_count += 1
+        
+        print(f"   💾 Inserted {inserted_count} chunk(s)")
+        return inserted_count > 0
+        
+    except Exception as e:
+        print(f"❌ Error inserting page chunks: {e}")
+        return False
+
 def insert_page_embedding(db, collection_name, page_data, embedding, model_id):
     """Insert a page with its embedding into Astra DB"""
     try:
@@ -435,7 +609,7 @@ def process_notion_to_vector_db():
     # Load environment variables
     (notion_secret, notion_connection, aws_access_key, aws_secret_key, 
      aws_region, bedrock_model_id, astra_db_endpoint, astra_db_keyspace, 
-     astra_db_application_token, astra_db_name, vector_collection_name) = load_environment()
+     astra_db_application_token, astra_db_name, vector_collection_name, chunk_size) = load_environment()
     
     if not all([notion_secret, aws_access_key, aws_secret_key, astra_db_endpoint, 
                 astra_db_keyspace, astra_db_application_token]):
@@ -492,9 +666,14 @@ def process_notion_to_vector_db():
         
         # Debug: Show what's happening
         if existing_page is not None:
-            # The existing_page is the full result, we need to get the document data
-            existing_doc = existing_page.get('data', {}).get('document', {})
-            existing_time = existing_doc.get('last_updated_time', 'None')
+            # Handle both old and new data formats
+            if 'data' in existing_page and 'document' in existing_page['data']:
+                # Old format
+                existing_doc = existing_page['data']['document']
+                existing_time = existing_doc.get('last_updated_time', 'None')
+            else:
+                # New chunked format
+                existing_time = existing_page.get('last_updated_time', 'None')
             current_time = page_data.get('last_edited_time', 'None')
             print(f"      📅 Existing: {existing_time}")
             print(f"      📅 Current: {current_time}")
@@ -503,26 +682,26 @@ def process_notion_to_vector_db():
             print(f"      📅 New page, will insert")
         
         if needs_update and page_data['content_text'].strip():
-            print(f"   🔍 Generating embedding for content...")
-            embedding = get_embedding(bedrock_client, page_data['content_text'], bedrock_model_id)
+            print(f"   🔍 Generating embeddings for content...")
+            chunk_embeddings = get_chunk_embeddings(bedrock_client, page_data['content_text'], bedrock_model_id, chunk_size)
             
-            if embedding:
+            if chunk_embeddings:
                 if existing_page is not None:
-                    print(f"   🔄 Page changed, updating...")
-                    if update_page_embedding(db, vector_collection_name, page_data, embedding, bedrock_model_id):
+                    print(f"   🔄 Page changed, updating chunks...")
+                    if update_page_chunks(db, vector_collection_name, page_data, chunk_embeddings, bedrock_model_id):
                         updated_pages += 1
                         print(f"   ✅ Successfully updated page {i}/{total_pages}")
                     else:
                         print(f"   ❌ Failed to update page {i}/{total_pages}")
                 else:
-                    print(f"   💾 Storing new page in vector database...")
-                    if insert_page_embedding(db, vector_collection_name, page_data, embedding, bedrock_model_id):
+                    print(f"   💾 Storing new page chunks in vector database...")
+                    if insert_page_chunks(db, vector_collection_name, page_data, chunk_embeddings, bedrock_model_id):
                         successful_inserts += 1
                         print(f"   ✅ Successfully stored page {i}/{total_pages}")
                     else:
                         print(f"   ❌ Failed to store page {i}/{total_pages}")
             else:
-                print(f"   ⚠️  Failed to generate embedding for page {i}/{total_pages}")
+                print(f"   ⚠️  Failed to generate embeddings for page {i}/{total_pages}")
         elif not needs_update:
             print(f"   ⏭️  Page unchanged, skipping...")
             unchanged_pages += 1

@@ -52,6 +52,9 @@ ASTRA_DB_KEYSPACE=your_keyspace_name_here
 ASTRA_DB_APPLICATION_TOKEN=your_astra_db_token_here
 ASTRA_DB_NAME=your_database_name_here
 VECTOR_COLLECTION_NAME=your_collection_name_here
+
+# テキストチャンキング設定
+CHUNK_SIZE=8000
 ```
 
 ### 3. 認証情報の取得
@@ -214,8 +217,13 @@ python notion_to_vector_db.py
 📄 Found 8 page(s)
 
 📄 Processing page 1/8: 12015dc6-b965-80f2-af2b-ee7fc8a1653b
-   🔍 Generating embedding for content...
-   💾 Storing in vector database...
+   🔍 Generating embeddings for content...
+   📄 Split content into 3 chunk(s)
+   🔍 Generating embedding for chunk 1/3...
+   🔍 Generating embedding for chunk 2/3...
+   🔍 Generating embedding for chunk 3/3...
+   💾 Storing new page chunks in vector database...
+   💾 Inserted 3 chunk(s)
    ✅ Successfully stored page 1/8
 
 🎉 Processing completed!
@@ -250,13 +258,34 @@ python notion_to_vector_db.py
 - 画像、ファイル、動画（URLとして保存）
 - リッチテキストフォーマット（プレーンテキストのみ使用）
 
+### テキストチャンキング機能
+
+長いテキストコンテンツを効率的に処理するため、パイプラインは**インテリジェントなテキストチャンキング**を実装しています：
+
+**チャンキングの特徴:**
+- ✅ **RecursiveCharacterTextSplitter**: LangChainの高度なテキスト分割機能を使用
+- ✅ **適応的チャンクサイズ**: `CHUNK_SIZE`環境変数で設定可能（デフォルト: 8000文字）
+- ✅ **オーバーラップ**: チャンク間の200文字オーバーラップでコンテキスト保持
+- ✅ **スマート分割**: 段落、文、単語の境界で優先的に分割
+- ✅ **複数チャンク対応**: 1ページが複数のベクトルとして保存
+
+**設定例:**
+```bash
+# .env ファイルでチャンクサイズを調整
+CHUNK_SIZE=8000  # 長いページ用
+CHUNK_SIZE=4000  # 短いページ用
+CHUNK_SIZE=12000 # 非常に長いページ用
+```
+
 ### データベース構造
 
-パイプラインは以下の構造を持つベクトルコレクションを作成します：
+パイプラインは以下の構造を持つベクトルコレクションを作成します（チャンキング対応）：
 
 ```json
 {
   "page_id": "unique_notion_page_id",
+  "chunk_id": "unique_notion_page_id_chunk_1",
+  "chunk_index": 1,
   "page_title": "ページタイトル",
   "page_url": "https://notion.so/...",
   "created_time": "2024-01-01T00:00:00Z",
@@ -267,6 +296,7 @@ python notion_to_vector_db.py
     "tags": ["tag1", "tag2"]
   },
   "content_text": "エンベディング用の完全なテキストコンテンツ",
+  "chunk_text": "このチャンクのテキストコンテンツ",
   "content_blocks": [
     {
       "id": "block_id",
@@ -276,6 +306,7 @@ python notion_to_vector_db.py
   ],
   "embedding_model": "amazon.titan-embed-text-v2:0",
   "created_at": "2024-01-01T00:00:00Z",
+  "last_updated_time": "2024-01-01T00:00:00Z",
   "$vector": [0.1, 0.2, ...] // 1024次元のエンベディング
 }
 ```
