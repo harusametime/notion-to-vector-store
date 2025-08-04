@@ -134,13 +134,16 @@ def get_chunk_embeddings(bedrock_client, text, model_id, chunk_size):
     if not text or not text.strip():
         return []
     
+    # Calculate adaptive overlap (20% of chunk size, but at least 10 and at most 200)
+    overlap = max(10, min(200, chunk_size // 5))
+    
     # Split text into chunks
-    chunks = chunk_text(text, chunk_size)
+    chunks = chunk_text(text, chunk_size, overlap)
     
     if not chunks:
         return []
     
-    print(f"   📄 Split content into {len(chunks)} chunk(s)")
+    print(f"   📄 Split content into {len(chunks)} chunk(s) (chunk_size: {chunk_size}, overlap: {overlap})")
     
     chunk_embeddings = []
     for i, chunk in enumerate(chunks, 1):
@@ -408,14 +411,27 @@ def should_update_page(existing_page, page_data):
         return True  # New page, needs insertion
     
     # Get last updated time from existing page
-    # Handle both old single-vector format and new chunked format
-    if 'data' in existing_page and 'document' in existing_page['data']:
-        # Old format
-        existing_doc = existing_page['data']['document']
-        existing_updated_time = existing_doc.get('last_updated_time')
-    else:
-        # New chunked format - document is directly in the result
-        existing_updated_time = existing_page.get('last_updated_time')
+    # Handle different data structures that might be returned
+    existing_updated_time = None
+    
+    try:
+        if isinstance(existing_page, dict):
+            if 'data' in existing_page and isinstance(existing_page['data'], dict) and 'document' in existing_page['data']:
+                # Old format
+                existing_doc = existing_page['data']['document']
+                existing_updated_time = existing_doc.get('last_updated_time')
+            elif 'last_updated_time' in existing_page:
+                # New chunked format - document is directly in the result
+                existing_updated_time = existing_page.get('last_updated_time')
+            else:
+                # Unknown format, update to be safe
+                return True
+        else:
+            # Not a dict, update to be safe
+            return True
+    except Exception as e:
+        print(f"   ⚠️  Error parsing existing page data: {e}")
+        return True  # Update to be safe
     
     if not existing_updated_time:
         return True  # No timestamp, update to be safe
@@ -481,7 +497,17 @@ def update_page_chunks(db, collection_name, page_data, chunk_embeddings, model_i
         
         # First, delete all existing chunks for this page
         delete_result = db.collection(collection_name).delete_many({"page_id": page_data['id']})
-        print(f"   🗑️  Deleted {delete_result.deleted_count} existing chunk(s)")
+        
+        # Handle different possible return formats from Astra DB
+        deleted_count = 0
+        if hasattr(delete_result, 'deleted_count'):
+            deleted_count = delete_result.deleted_count
+        elif isinstance(delete_result, dict) and 'deletedCount' in delete_result:
+            deleted_count = delete_result['deletedCount']
+        elif isinstance(delete_result, dict) and 'deleted_count' in delete_result:
+            deleted_count = delete_result['deleted_count']
+        
+        print(f"   🗑️  Deleted {deleted_count} existing chunk(s)")
         
         # Insert new chunks
         inserted_count = 0
@@ -508,7 +534,13 @@ def update_page_chunks(db, collection_name, page_data, chunk_embeddings, model_i
             
             # Insert chunk document
             result = db.collection(collection_name).insert_one(document)
-            if result.inserted_id:
+            
+            # Handle different possible return formats from Astra DB
+            if hasattr(result, 'inserted_id') and result.inserted_id:
+                inserted_count += 1
+            elif isinstance(result, dict) and ('insertedId' in result or 'inserted_id' in result):
+                inserted_count += 1
+            elif result:  # If result exists but we can't determine the format, assume success
                 inserted_count += 1
         
         print(f"   💾 Inserted {inserted_count} new chunk(s)")
@@ -554,7 +586,13 @@ def insert_page_chunks(db, collection_name, page_data, chunk_embeddings, model_i
             
             # Insert chunk document
             result = db.collection(collection_name).insert_one(document)
-            if result.inserted_id:
+            
+            # Handle different possible return formats from Astra DB
+            if hasattr(result, 'inserted_id') and result.inserted_id:
+                inserted_count += 1
+            elif isinstance(result, dict) and ('insertedId' in result or 'inserted_id' in result):
+                inserted_count += 1
+            elif result:  # If result exists but we can't determine the format, assume success
                 inserted_count += 1
         
         print(f"   💾 Inserted {inserted_count} chunk(s)")
@@ -666,14 +704,24 @@ def process_notion_to_vector_db():
         
         # Debug: Show what's happening
         if existing_page is not None:
-            # Handle both old and new data formats
-            if 'data' in existing_page and 'document' in existing_page['data']:
-                # Old format
-                existing_doc = existing_page['data']['document']
-                existing_time = existing_doc.get('last_updated_time', 'None')
-            else:
-                # New chunked format
-                existing_time = existing_page.get('last_updated_time', 'None')
+            # Handle different data structures that might be returned
+            existing_time = 'None'
+            try:
+                if isinstance(existing_page, dict):
+                    if 'data' in existing_page and isinstance(existing_page['data'], dict) and 'document' in existing_page['data']:
+                        # Old format
+                        existing_doc = existing_page['data']['document']
+                        existing_time = existing_doc.get('last_updated_time', 'None')
+                    elif 'last_updated_time' in existing_page:
+                        # New chunked format
+                        existing_time = existing_page.get('last_updated_time', 'None')
+                    else:
+                        existing_time = 'Unknown format'
+                else:
+                    existing_time = 'Non-dict format'
+            except Exception as e:
+                existing_time = f'Error: {e}'
+            
             current_time = page_data.get('last_edited_time', 'None')
             print(f"      📅 Existing: {existing_time}")
             print(f"      📅 Current: {current_time}")
